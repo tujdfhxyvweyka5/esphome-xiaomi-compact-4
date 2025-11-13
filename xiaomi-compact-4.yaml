@@ -6,8 +6,7 @@ esphome:
           id: motorPwmOutput
           level: 50%
       - switch.turn_on: motorEn      
-      - lambda: |-
-          id(devEnabled).publish_state(false);    
+      - lambda: "id(devEnabled).publish_state(false);"
 
 esp32:
   variant: ESP32
@@ -23,29 +22,28 @@ esp32:
 
 wifi:
   on_connect: 
-    then:
-      - lambda: |-
-          id(wifiConnected).publish_state(true);
+    - lambda: "id(wifiConnected).publish_state(true);"
   on_disconnect: 
-    then:
-      - lambda: |-
-          id(wifiConnected).publish_state(false);
+    - lambda: "id(wifiConnected).publish_state(false);"
           
 web_server:
-  include_internal: True
+  include_internal: true
 
+# UART for PM2.5 sensor
 uart:
   - id: pm25uart
     tx_pin: GPIO17
     rx_pin: GPIO16
     baud_rate: 9600 
 
+# I2C for LED control
 i2c:
   sda: GPIO14
   scl: GPIO27
   id: i2cLeds
-  scan: False
+  scan: false
 
+# I2C device addresses for HID controls
 i2c_device:
   - id: cmdHidBrightness
     address: 0x24 
@@ -58,77 +56,78 @@ i2c_device:
   - id: cmdHidBacklightModeChangeButton
     address: 0x37
 
+# Constants (defined in substitutions for reusability)
+substitutions:
+  button_led_on: "0x3C"
+  button_led_off: "0x00"
+
 switch:
+  # HID Button LEDs
   - platform: template
     name: "HID Backlight - On/Off Button"
     id: hidBacklightOnOffButton
-    internal: True   
-    optimistic: True 
+    internal: true
+    optimistic: true
     on_state: 
-      then:
-        - lambda: |-
-            static const int BUTTON_LED_ON = 0x3C;
-            static const int BUTTON_LED_OFF = 0x00;
-            auto val = x ? BUTTON_LED_ON : BUTTON_LED_OFF;
-            id(cmdHidBacklightOnOffButton).write_bytes(val, 0, 0);
+      - lambda: |-
+          auto val = x ? ${button_led_on} : ${button_led_off};
+          id(cmdHidBacklightOnOffButton).write_bytes(val, 0, 0);
 
   - platform: template
     name: "HID Backlight - Brightness Change Button"
     id: hidBacklightBrightnessChangeButton
-    internal: True
-    optimistic: True
+    internal: true
+    optimistic: true
     on_state: 
-      then:
-        - lambda: |-
-            static const int BUTTON_LED_ON = 0x3C;
-            static const int BUTTON_LED_OFF = 0x00;
-            auto val = x ? BUTTON_LED_ON : BUTTON_LED_OFF;
-            id(cmdHidBacklightBrightnessChangeButton).write_bytes(val, 0, 0);
+      - lambda: |-
+          auto val = x ? ${button_led_on} : ${button_led_off};
+          id(cmdHidBacklightBrightnessChangeButton).write_bytes(val, 0, 0);
+
   - platform: template
     name: "HID Backlight - Change Mode Button"
     id: hidBacklightModeChangeButton
-    internal: True
-    optimistic: True
+    internal: true
+    optimistic: true
     on_state: 
-      then:
-        - lambda: |-
-            static const int BUTTON_LED_ON = 0x3C;
-            static const int BUTTON_LED_OFF = 0x00;
-            auto val = x ? BUTTON_LED_ON : BUTTON_LED_OFF;
-            id(cmdHidBacklightModeChangeButton).write_bytes(val, 0, 0);
+      - lambda: |-
+          auto val = x ? ${button_led_on} : ${button_led_off};
+          id(cmdHidBacklightModeChangeButton).write_bytes(val, 0, 0);
+
+  # Device controls
   - platform: template
     name: "Child Lock"
     id: childLock
-    optimistic: True
+    optimistic: true
     icon: mdi:lock
     on_state: 
-      then: 
-        - script.execute: hidUpdate
+      - script.execute: hidUpdate
+
   - platform: template
     id: replaceFilter
     name: "Replace Filter"
-    optimistic: True
+    optimistic: true
     icon: mdi:filter-off
     on_state: 
-      then: 
-        - script.execute: hidUpdate        
+      - script.execute: hidUpdate
+
   - platform: gpio
     pin: GPIO2
     id: motorEn
     name: "Motor Enabled"
-    internal: True
+    internal: true
+
   - platform: template
     name: "WiFi Enable"
     id: wifiEnable
-    internal: True
+    internal: true
     restore_mode: DISABLED
-    lambda: |-
-      return !id(wifiClient).is_disabled();
+    lambda: "return !id(wifiClient).is_disabled();"
     turn_on_action:
       - wifi.enable          
     turn_off_action:
       - wifi.disable
 
+# PM2.5 sensor polling
 interval:
   - interval: 30s
     then: 
@@ -139,52 +138,45 @@ interval:
       - lambda: |-
           static std::deque<uint8_t> buf;
           const int FRAME_LEN = 20;
+          const uint8_t HEADER[] = {0x16, 0x11, 0x0B};
 
-          // fill buffer
+          // Fill buffer
           uint8_t tmp;
           while (buf.size() < FRAME_LEN && id(pm25uart).read_byte(&tmp)) {
             buf.push_back(tmp);
           }
 
-          const uint8_t H0 = 0x16;
-          const uint8_t H1 = 0x11;
-          const uint8_t H2 = 0x0B;
-          
-
           while (true) {
-
-            // need at least header
             if (buf.size() < 3) break;
 
-            // align on header
+            // Align on header
             while (buf.size() >= 3 &&
-                   !(buf[0] == H0 && buf[1] == H1 && buf[2] == H2)) {
+                   !(buf[0] == HEADER[0] && buf[1] == HEADER[1] && buf[2] == HEADER[2])) {
               buf.pop_front();
             }
 
             if (buf.size() < 3) break;
-
-            // wait until full frame collected
             if ((int)buf.size() < FRAME_LEN) break;
 
-            // we have a full frame
+            // Extract frame
             uint8_t frame[FRAME_LEN];
-            for (int i=0;i<FRAME_LEN;i++) {
+            for (int i = 0; i < FRAME_LEN; i++) {
               frame[i] = buf.front();
               buf.pop_front();
             }
 
-            uint16_t pm25val = (((uint16_t)frame[15])<<8) | (frame[16]);
+            uint16_t pm25val = (((uint16_t)frame[15]) << 8) | frame[16];
             id(pm25sensor).publish_state(pm25val);            
           } 
 
 binary_sensor:
+  # Physical buttons
   - platform: gpio
     pin: 
       number: GPIO5
-      inverted: True
+      inverted: true
     name: "HID Change Mode Button"
-    internal: True
+    internal: true
     on_click:
       - max_length: 1s
         then:
@@ -196,13 +188,14 @@ binary_sensor:
       - min_length: 7s
         max_length: 14s          
         then:
-          - lambda: "id(childLock).publish_state(true);"                      
+          - lambda: "id(childLock).publish_state(true);"
+
   - platform: gpio
     pin: 
       number: GPIO18
-      inverted: True
+      inverted: true
     name: "HID Light Button"
-    internal: True
+    internal: true
     on_click:
       - max_length: 1s
         then:
@@ -211,79 +204,66 @@ binary_sensor:
                 lambda: "return id(devEnabled).state;"
               then:
                 - select.next: brightness
+
   - platform: gpio
     pin: 
       number: GPIO19
-      inverted: True
+      inverted: true
     name: "HID On/Off Button"
-    internal: True
+    internal: true
     on_click: 
       - max_length: 1s
         then: 
-        - lambda: |-
-            auto enabled = id(devEnabled).state;
-            id(devEnabled).publish_state(!enabled);            
+          - lambda: |-
+              auto enabled = id(devEnabled).state;
+              id(devEnabled).publish_state(!enabled);
             
+  # Virtual sensors for HID status updates
   - platform: template
     id: hidChildLock
     name: "HID Child Lock Active"
-    internal: True
+    internal: true
     on_state: 
-      then:
-        - lambda: |-
-            uint8_t state = id(hidComponentStatus).has_state() ? id(hidComponentStatus).state : 0x00;
-            ESP_LOGD("main", "Click: Child Lock, state=%02x", state);
-            if(bool(x)){
-              state = state | 0x04;
-            }else{
-              state = state & ~0x04;
-            }
-            id(hidComponentStatus).publish_state(state);                        
+      - lambda: |-
+          uint8_t state = id(hidComponentStatus).has_state() ? id(hidComponentStatus).state : 0x00;
+          state = x ? (state | 0x04) : (state & ~0x04);
+          id(hidComponentStatus).publish_state(state);
+
   - platform: template
     id: hidWifiConnected
     name: "HID WiFi connected"
-    internal: True
+    internal: true
     on_state: 
-      then:
-        - lambda: |-
-            uint8_t state = id(hidComponentStatus).has_state() ? id(hidComponentStatus).state : 0x00;
-            ESP_LOGD("main", "WiFi connected: state=%02x", state);
-            if(x){
-              state = state | 0x02;
-            }else{
-              state = state & ~0x02;
-            }
-            id(hidComponentStatus).publish_state(state); 
+      - lambda: |-
+          uint8_t state = id(hidComponentStatus).has_state() ? id(hidComponentStatus).state : 0x00;
+          state = x ? (state | 0x02) : (state & ~0x02);
+          id(hidComponentStatus).publish_state(state);
+
   - platform: template
     id: hidReplaceFilter
     name: "HID Replace Filter"
-    internal: True
+    internal: true
     on_state: 
-      then:
-        - lambda: |-
-            uint8_t state = id(hidComponentStatus).has_state() ? id(hidComponentStatus).state : 0x00;
-            ESP_LOGD("main", "Replace filter: state=%02x", state);
-            if(x){
-              state = state | 0x01;
-            }else{
-              state = state & ~0x01;
-            }
-            id(hidComponentStatus).publish_state(state); 
+      - lambda: |-
+          uint8_t state = id(hidComponentStatus).has_state() ? id(hidComponentStatus).state : 0x00;
+          state = x ? (state | 0x01) : (state & ~0x01);
+          id(hidComponentStatus).publish_state(state);
+
   - platform: template
     id: wifiConnected
     name: "WiFi connected"
-    internal: True
+    internal: true
     on_state_change: 
-      then: 
-        - script.execute: hidUpdate
+      - script.execute: hidUpdate
+
   - platform: template
     id: devEnabled
     name: "Device Enabled"
-    internal: True
+    internal: true
     on_state: 
-      then: 
-        - script.execute: hidUpdate
-        - script.execute: motorUpdate
+      - script.execute: hidUpdate
+      - script.execute: motorUpdate
+
 sensor:
   - platform: template
     name: "PM 2.5"
@@ -292,17 +272,15 @@ sensor:
     unit_of_measurement: "μg/m³"
     accuracy_decimals: 0
     on_value: 
-      then:
-        - script.execute: hidUpdate                        
-        - script.execute: motorUpdate
+      - script.execute: hidUpdate
+      - script.execute: motorUpdate
 
   - platform: template
     name: "HID Component Status"
     id: hidComponentStatus
-    internal: True
+    internal: true
     accuracy_decimals: 0    
     on_value: 
-      then:
       - lambda: |-
           ESP_LOGD("main", "Update LEDs: state=%02x", uint8_t(x));
           id(cmdHidStatusLeds).write_bytes(uint8_t(x), 0, 0);
@@ -315,15 +293,14 @@ sensor:
     update_interval: 1s
     accuracy_decimals: 0
     filters:
-      - lambda: |-
-          return x / 60.0f;
+      - lambda: "return x / 60.0f;"
 
 select:
   - platform: template
     name: "HID Mode"
     id: hidMode
     optimistic: true
-    internal: True
+    internal: true
     icon: mdi:brightness-5
     options:
       - FAV
@@ -332,24 +309,20 @@ select:
       - TURNOFF
     initial_option: TURNOFF
     on_value: 
-      then:
-        - lambda: |-
-            static const int LED_FAV = 0x20;
-            static const int LED_NIGHT = 0x10;
-            static const int LED_AUTO = 0x08;
-            uint8_t led=0;
-            if(x == "FAV"){
-              led = 0x20;
-            } else if(x == "NIGHT"){
-              led = 0x10;
-            } else if(x == "AUTO"){
-              led = 0x08;
-            }
-            uint8_t state = id(hidComponentStatus).has_state() ? id(hidComponentStatus).state : 0x00;
-            ESP_LOGD("main", "Change mode: state=%02x", state);
-            state = state & ~(LED_FAV | LED_NIGHT | LED_AUTO);
-            state = state | led;
-            id(hidComponentStatus).publish_state(state);            
+      - lambda: |-
+          const uint8_t LED_FAV = 0x20;
+          const uint8_t LED_NIGHT = 0x10;
+          const uint8_t LED_AUTO = 0x08;
+          const uint8_t LED_MASK = LED_FAV | LED_NIGHT | LED_AUTO;
+          
+          uint8_t led = 0;
+          if (x == "FAV") led = LED_FAV;
+          else if (x == "NIGHT") led = LED_NIGHT;
+          else if (x == "AUTO") led = LED_AUTO;
+          
+          uint8_t state = id(hidComponentStatus).has_state() ? id(hidComponentStatus).state : 0x00;
+          state = (state & ~LED_MASK) | led;
+          id(hidComponentStatus).publish_state(state);
 
   - platform: template
     name: "Mode"
@@ -361,11 +334,10 @@ select:
       - NIGHT
       - AUTO
     initial_option: AUTO
-    restore_value: True
+    restore_value: true
     on_value: 
-      then: 
-        - script.execute: hidUpdate
-        - script.execute: motorUpdate
+      - script.execute: hidUpdate
+      - script.execute: motorUpdate
 
   - platform: template
     name: "Brightness"
@@ -378,25 +350,27 @@ select:
       - ZERO
     initial_option: FULL
     on_value: 
-      then:
-        - script.execute: hidUpdate  
+      - script.execute: hidUpdate  
 
 output:
   - platform: ledc
     pin: GPIO4
     id: buzzer
+
   - platform: ledc
     pin: GPIO21
     id: RGB_Red
+
   - platform: ledc
     pin: GPIO32
     id: RGB_Orange
+
   - platform: ledc
     pin: GPIO33
     id: RGB_Green
+
   - platform: ledc
-    pin: 
-      number: GPIO26      
+    pin: GPIO26
     id: motorPwmOutput
     frequency: 300Hz
 
@@ -404,9 +378,11 @@ light:
   - platform: monochromatic
     output: RGB_Red
     id: StatusRed
+
   - platform: monochromatic
     output: RGB_Orange
     id: StatusOrange
+
   - platform: monochromatic
     output: RGB_Green
     id: StatusGreen
@@ -420,12 +396,13 @@ number:
     step: 10
     initial_value: 300
     unit_of_measurement: "Hz"
-    optimistic: True
-    internal: True
+    optimistic: true
+    internal: true
     on_value:
       - output.ledc.set_frequency:
           id: motorPwmOutput
-          frequency: !lambda "return x;"      
+          frequency: !lambda "return x;"
+
   - platform: template
     id: motorSpeed
     name: "Motor Speed"
@@ -435,12 +412,13 @@ number:
     icon: mdi:speedometer
     step: 1
     initial_value: 30
-    optimistic: True
-    internal: True
+    optimistic: true
+    internal: true
     on_value:
       - number.set: 
           id: motorSetpoint
-          value: !lambda return x*6 + 100;
+          value: !lambda "return x * 6 + 100;"
+
   - platform: template
     id: motorSpeedFav
     name: "Motor Speed Favorite Mode"
@@ -449,10 +427,11 @@ number:
     icon: mdi:heart
     step: 1
     initial_value: 30
-    restore_value: True
-    optimistic: True
+    restore_value: true
+    optimistic: true
     on_value:
       - script.execute: motorUpdate
+
   - platform: template
     id: motorSpeedNight
     name: "Motor Speed at Night Mode"
@@ -462,10 +441,11 @@ number:
     entity_category: config
     step: 1
     initial_value: 10
-    restore_value: True
-    optimistic: True
+    restore_value: true
+    optimistic: true
     on_value:
       - script.execute: motorUpdate
+
   - platform: template
     id: motorSpeedP
     name: "Motor Speed P Factor"
@@ -473,83 +453,85 @@ number:
     max_value: 10
     step: 0.01    
     initial_value: 3
-    restore_value: True
-    optimistic: True
+    restore_value: true
+    optimistic: true
     entity_category: config
     on_value: 
-      then:
-        - script.execute: motorUpdate
+      - script.execute: motorUpdate
+
   - platform: template
     name: "HID Backlight Brightness"
     id: hidBacklightBrightness
-    internal: True
+    internal: true
     min_value: 1
     max_value: 8
     step: 1
-    optimistic: True
+    optimistic: true
     on_value: 
-      then:
       - lambda: |-
-          ESP_LOGD("main", "Update LED brightness");
           uint8_t lvl = (uint8_t) std::clamp(x, 1.0f, 8.0f);
-          if(lvl == 8){
-            lvl = 0;
-          }        
-          id(cmdHidBrightness).write_bytes((lvl<<4) | 0x01, 0, 0);
+          if (lvl == 8) lvl = 0;
+          id(cmdHidBrightness).write_bytes((lvl << 4) | 0x01, 0, 0);
 
 script:
   - id: hidUpdate
     then:
       - lambda: |-
-          ESP_LOGD("script", "Update HID");
+          // Get current state
           std::string brightnessMode = id(brightness).state;
           bool isDevEnabled = id(devEnabled).state;
           bool isFullBacklight = brightnessMode == "FULL";
           bool isNoBacklight = brightnessMode == "ZERO";
           bool disableHid = isNoBacklight || !isDevEnabled;
-          uint8_t expectedBacklight;
-          float brightnessCoefficient = isFullBacklight ? 1.0 : 0.6;
-          if(isFullBacklight && isDevEnabled){
-            expectedBacklight=8;
-          } else {
-            expectedBacklight=3;
-          }
+          
+          // Update backlight brightness
+          uint8_t expectedBacklight = (isFullBacklight && isDevEnabled) ? 8 : 3;
           id(hidBacklightBrightness).publish_state(expectedBacklight);
+          
+          // Update button LEDs
           id(hidBacklightModeChangeButton).publish_state(!disableHid);
           id(hidBacklightBrightnessChangeButton).publish_state(!disableHid);
           id(hidBacklightOnOffButton).publish_state(true);
-          id(hidMode).make_call().set_option(disableHid ? "TURNOFF" : id(devMode).state ).perform();
-          id(hidChildLock).publish_state(disableHid ? false : bool(id(childLock).state));
-          id(hidWifiConnected).publish_state(disableHid ? false : bool(id(wifiConnected).state));
-          id(hidReplaceFilter).publish_state(disableHid ? false : bool(id(replaceFilter).state));
+          
+          // Update mode display
+          id(hidMode).make_call().set_option(disableHid ? "TURNOFF" : id(devMode).state).perform();
+          
+          // Update status indicators
+          id(hidChildLock).publish_state(disableHid ? false : id(childLock).state);
+          id(hidWifiConnected).publish_state(disableHid ? false : id(wifiConnected).state);
+          id(hidReplaceFilter).publish_state(disableHid ? false : id(replaceFilter).state);
 
-          if(disableHid || !id(pm25sensor).has_state()){
+          // Update RGB status lights
+          if (disableHid || !id(pm25sensor).has_state()) {
             id(StatusGreen).turn_off().perform();
             id(StatusOrange).turn_off().perform();
             id(StatusRed).turn_off().perform();
-          }else{          
-            float green, orange, red;
-            green = orange = red = 0;
-            auto x = id(pm25sensor).state;
-            if(x < 10){
-              green = 1.0;
-            } else if(x < 20){
-              green = 0.6;
-              orange = 1.0;
-            } else if(x < 30){
-              green = 0.35;
-              orange = 1.0;
-            } else if(x < 40){
-              orange = 1.0;
-              red = 0.35;
+          } else {
+            float brightnessCoef = isFullBacklight ? 1.0f : 0.6f;
+            float green = 0, orange = 0, red = 0;
+            float pm25 = id(pm25sensor).state;
+            
+            if (pm25 < 10) {
+              green = 1.0f;
+            } else if (pm25 < 20) {
+              green = 0.6f;
+              orange = 1.0f;
+            } else if (pm25 < 30) {
+              green = 0.35f;
+              orange = 1.0f;
+            } else if (pm25 < 40) {
+              orange = 1.0f;
+              red = 0.35f;
             } else {
-              orange = 1.0;
-              red = 1.0;
+              orange = 1.0f;
+              red = 1.0f;
             }
-            id(StatusGreen).turn_on().set_brightness(green * brightnessCoefficient).perform();
-            id(StatusOrange).turn_on().set_brightness(orange * brightnessCoefficient).perform();
-            id(StatusRed).turn_on().set_brightness(red * brightnessCoefficient).perform();
+            
+            id(StatusGreen).turn_on().set_brightness(green * brightnessCoef).perform();
+            id(StatusOrange).turn_on().set_brightness(orange * brightnessCoef).perform();
+            id(StatusRed).turn_on().set_brightness(red * brightnessCoef).perform();
           }
+
   - id: motorUpdate
     then:
       - if:
@@ -558,27 +540,27 @@ script:
           then:
             - lambda: |-
                 auto mode = id(devMode).state;
-                auto favSpeed = id(motorSpeedFav).state;
+                float speed;
+                
                 if (mode == "AUTO") {
-                  if(id(pm25sensor).has_state()){
-                    auto x = id(pm25sensor).state; // range 1-600
-                    float speed = x * id(motorSpeedP).state;
-                    id(motorSpeed).publish_state(std::clamp(speed, 0.0f, 100.0f));
-                  }else{
-                    id(motorSpeed).publish_state(favSpeed);
+                  if (id(pm25sensor).has_state()) {
+                    speed = id(pm25sensor).state * id(motorSpeedP).state;
+                  } else {
+                    speed = id(motorSpeedFav).state;
                   }
                 } else if (mode == "FAV") {
-                  id(motorSpeed).publish_state(favSpeed);
-                } else {
-                  id(motorSpeed).publish_state(id(motorSpeedNight).state);
+                  speed = id(motorSpeedFav).state;
+                } else {  // NIGHT
+                  speed = id(motorSpeedNight).state;
                 }
                 
+                id(motorSpeed).publish_state(std::clamp(speed, 0.0f, 100.0f));
             - switch.turn_on: motorEn
           else:
             - number.set:
                 id: motorSpeed
                 value: 0
-            - switch.turn_off: motorEn      
+            - switch.turn_off: motorEn
 
 rtttl:
   output: buzzer
@@ -588,10 +570,11 @@ rtttl:
 button:
   - platform: restart
     name: "Restart"
+
   - platform: template
     name: "On/Off Button"
     icon: mdi:power
     on_press:
       - lambda: |-
           auto enabled = id(devEnabled).state;
-          id(devEnabled).publish_state(!enabled);  
+          id(devEnabled).publish_state(!enabled);
