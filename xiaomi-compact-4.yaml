@@ -1,12 +1,15 @@
 esphome:
   on_boot: 
+    priority: 600  # Run before most components initialize
     then:
       - output.turn_on: motorPwmOutput
       - output.set_level:
           id: motorPwmOutput
           level: 50%
-      - switch.turn_on: motorEn      
+      - switch.turn_off: motorEn  # Motor OFF during startup
       - lambda: "id(devEnabled).publish_state(false);"
+      - delay: 2s  # Wait for system to stabilize
+      - script.execute: playStartupSound
 
 esp32:
   variant: ESP32
@@ -60,6 +63,7 @@ i2c_device:
 substitutions:
   button_led_on: "0x3C"
   button_led_off: "0x00"
+  filter_lifetime_hours: "2160"  # 90 days * 24 hours
 
 switch:
   # HID Button LEDs
@@ -98,17 +102,31 @@ switch:
     name: "Child Lock"
     id: childLock
     optimistic: true
+    restore_value: true
     icon: mdi:lock
     on_state: 
       - script.execute: hidUpdate
+      - if:
+          condition:
+            lambda: "return x;"
+          then:
+            - script.execute: playLockSound
+          else:
+            - script.execute: playUnlockSound
 
   - platform: template
     id: replaceFilter
     name: "Replace Filter"
     optimistic: true
+    restore_value: true
     icon: mdi:filter-off
     on_state: 
       - script.execute: hidUpdate
+      - if:
+          condition:
+            lambda: "return x;"
+          then:
+            - script.execute: playWarningSound
 
   - platform: gpio
     pin: GPIO2
@@ -126,6 +144,14 @@ switch:
       - wifi.enable          
     turn_off_action:
       - wifi.disable
+
+  - platform: template
+    name: "Sound Notifications"
+    id: soundEnabled
+    optimistic: true
+    restore_value: true
+    initial_state: true
+    icon: mdi:volume-high
 
 # PM2.5 sensor polling
 interval:
@@ -167,10 +193,24 @@ interval:
 
             uint16_t pm25val = (((uint16_t)frame[15]) << 8) | frame[16];
             id(pm25sensor).publish_state(pm25val);            
-          } 
+          }
+
+  # Filter runtime tracker - updates every hour
+  - interval: 1h
+    then:
+      - lambda: |-
+          if (id(devEnabled).state && id(motorSpeed).state > 0) {
+            float current = id(filterRuntimeHours).state;
+            id(filterRuntimeHours).publish_state(current + 1.0f);
+            
+            // Check if filter needs replacement
+            if (current + 1.0f >= ${filter_lifetime_hours}) {
+              id(replaceFilter).publish_state(true);
+            }
+          }
 
 binary_sensor:
-  # Physical buttons
+  # Physical buttons with child lock support
   - platform: gpio
     pin: 
       number: GPIO5
@@ -182,13 +222,20 @@ binary_sensor:
         then:
           - if: 
               condition:
-                lambda: "return id(devEnabled).state;"
+                and:
+                  - lambda: "return id(devEnabled).state;"
+                  - lambda: "return !id(childLock).state;"
               then:
                 - select.next: devMode
+                - script.execute: playClickSound
+              else:
+                - script.execute: playBlockedSound
       - min_length: 7s
         max_length: 14s          
         then:
-          - lambda: "id(childLock).publish_state(true);"
+          - lambda: |-
+              bool current = id(childLock).state;
+              id(childLock).publish_state(!current);
 
   - platform: gpio
     pin: 
@@ -201,9 +248,14 @@ binary_sensor:
         then:
           - if:
               condition:
-                lambda: "return id(devEnabled).state;"
+                and:
+                  - lambda: "return id(devEnabled).state;"
+                  - lambda: "return !id(childLock).state;"
               then:
                 - select.next: brightness
+                - script.execute: playClickSound
+              else:
+                - script.execute: playBlockedSound
 
   - platform: gpio
     pin: 
@@ -214,9 +266,22 @@ binary_sensor:
     on_click: 
       - max_length: 1s
         then: 
-          - lambda: |-
-              auto enabled = id(devEnabled).state;
-              id(devEnabled).publish_state(!enabled);
+          - if:
+              condition:
+                lambda: "return !id(childLock).state;"
+              then:
+                - lambda: |-
+                    auto enabled = id(devEnabled).state;
+                    id(devEnabled).publish_state(!enabled);
+                - if:
+                    condition:
+                      lambda: "return id(devEnabled).state;"
+                    then:
+                      - script.execute: playPowerOnSound
+                    else:
+                      - script.execute: playPowerOffSound
+              else:
+                - script.execute: playBlockedSound
             
   # Virtual sensors for HID status updates
   - platform: template
@@ -294,6 +359,26 @@ sensor:
     accuracy_decimals: 0
     filters:
       - lambda: "return x / 60.0f;"
+
+  # Filter runtime tracking
+  - platform: template
+    name: "Filter Runtime Hours"
+    id: filterRuntimeHours
+    unit_of_measurement: "h"
+    icon: mdi:clock-outline
+    accuracy_decimals: 0
+    state_class: total_increasing
+
+  - platform: template
+    name: "Filter Life Remaining"
+    unit_of_measurement: "%"
+    icon: mdi:air-filter
+    accuracy_decimals: 0
+    lambda: |-
+      float runtime = id(filterRuntimeHours).state;
+      float remaining = 100.0f * (1.0f - runtime / ${filter_lifetime_hours});
+      return std::max(0.0f, remaining);
+    update_interval: 1h
 
 select:
   - platform: template
@@ -411,7 +496,7 @@ number:
     unit_of_measurement: '%'
     icon: mdi:speedometer
     step: 1
-    initial_value: 30
+    initial_value: 0  # Start at 0 to prevent startup spinning
     optimistic: true
     internal: true
     on_value:
@@ -488,10 +573,11 @@ script:
           uint8_t expectedBacklight = (isFullBacklight && isDevEnabled) ? 8 : 3;
           id(hidBacklightBrightness).publish_state(expectedBacklight);
           
-          // Update button LEDs
-          id(hidBacklightModeChangeButton).publish_state(!disableHid);
-          id(hidBacklightBrightnessChangeButton).publish_state(!disableHid);
-          id(hidBacklightOnOffButton).publish_state(true);
+          // Update button LEDs (child lock affects these)
+          bool buttonsEnabled = !disableHid && !id(childLock).state;
+          id(hidBacklightModeChangeButton).publish_state(buttonsEnabled);
+          id(hidBacklightBrightnessChangeButton).publish_state(buttonsEnabled);
+          id(hidBacklightOnOffButton).publish_state(true);  // Power button always active
           
           // Update mode display
           id(hidMode).make_call().set_option(disableHid ? "TURNOFF" : id(devMode).state).perform();
@@ -562,6 +648,79 @@ script:
                 value: 0
             - switch.turn_off: motorEn
 
+  # Sound notification scripts
+  - id: playClickSound
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: "return id(soundEnabled).state;"
+          then:
+            - rtttl.play: "click:d=4,o=5,b=100:16c6"
+
+  - id: playBlockedSound
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: "return id(soundEnabled).state;"
+          then:
+            - rtttl.play: "blocked:d=4,o=5,b=200:8e,8e"
+
+  - id: playLockSound
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: "return id(soundEnabled).state;"
+          then:
+            - rtttl.play: "lock:d=4,o=5,b=200:8c,8e,8g"
+
+  - id: playUnlockSound
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: "return id(soundEnabled).state;"
+          then:
+            - rtttl.play: "unlock:d=4,o=5,b=200:8g,8e,8c"
+
+  - id: playPowerOnSound
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: "return id(soundEnabled).state;"
+          then:
+            - rtttl.play: "poweron:d=4,o=5,b=180:8c,8e,8g,8c6"
+
+  - id: playPowerOffSound
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: "return id(soundEnabled).state;"
+          then:
+            - rtttl.play: "poweroff:d=4,o=5,b=180:8c6,8g,8e,8c"
+
+  - id: playWarningSound
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: "return id(soundEnabled).state;"
+          then:
+            - rtttl.play: "warning:d=4,o=5,b=200:8e,8p,8e,8p,8e"
+
+  - id: playStartupSound
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: "return id(soundEnabled).state;"
+          then:
+            - rtttl.play: "startup:d=4,o=5,b=160:8c,8d,8e,8f,8g"
+
 rtttl:
   output: buzzer
   id: sound
@@ -575,6 +734,28 @@ button:
     name: "On/Off Button"
     icon: mdi:power
     on_press:
+      - if:
+          condition:
+            lambda: "return !id(childLock).state;"
+          then:
+            - lambda: |-
+                auto enabled = id(devEnabled).state;
+                id(devEnabled).publish_state(!enabled);
+            - if:
+                condition:
+                  lambda: "return id(devEnabled).state;"
+                then:
+                  - script.execute: playPowerOnSound
+                else:
+                  - script.execute: playPowerOffSound
+          else:
+            - script.execute: playBlockedSound
+
+  - platform: template
+    name: "Reset Filter Runtime"
+    icon: mdi:filter-remove
+    on_press:
       - lambda: |-
-          auto enabled = id(devEnabled).state;
-          id(devEnabled).publish_state(!enabled);
+          id(filterRuntimeHours).publish_state(0);
+          id(replaceFilter).publish_state(false);
+      - script.execute: playClickSound
