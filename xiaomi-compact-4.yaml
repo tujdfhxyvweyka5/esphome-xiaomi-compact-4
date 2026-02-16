@@ -359,7 +359,7 @@ sensor:
     update_interval: 1s
     accuracy_decimals: 0
     filters:
-      - lambda: "return x / 60.0f;"
+      - lambda: "return x / 15.0f;"
 
   # Filter runtime tracking
   - platform: template
