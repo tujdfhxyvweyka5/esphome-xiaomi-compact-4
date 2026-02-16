@@ -24,6 +24,7 @@ esp32:
       ignore_efuse_custom_mac: true
 
 wifi:
+  id: wifiClient
   on_connect: 
     - lambda: "id(wifiConnected).publish_state(true);"
   on_disconnect: 
