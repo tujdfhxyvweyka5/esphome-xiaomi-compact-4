@@ -419,7 +419,7 @@ select:
       - NIGHT
       - AUTO
     initial_option: AUTO
-    restore_value: RESTORE_DEFAULT_OFF
+    restore_value: true
     on_value: 
       - script.execute: hidUpdate
       - script.execute: motorUpdate
