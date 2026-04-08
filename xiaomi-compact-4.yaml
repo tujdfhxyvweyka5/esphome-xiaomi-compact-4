@@ -167,38 +167,38 @@ interval:
           id: pm25uart
           data: [0x11, 0x02, 0x0B, 0x01, 0xE1]     
       - delay: 100ms            
-  - lambda: |-
-      const int FRAME_LEN = 20;
-      const uint8_t HEADER[] = {0x16, 0x11, 0x0B};
+      - lambda: |-
+          const int FRAME_LEN = 20;
+          const uint8_t HEADER[] = {0x16, 0x11, 0x0B};
 
-      // Fill buffer
-      uint8_t tmp;
-      while (id(pm25_buf).size() < FRAME_LEN && id(pm25uart).read_byte(&tmp)) {
-        id(pm25_buf).push_back(tmp);
-      }
+          // Fill buffer
+          uint8_t tmp;
+          while (id(pm25_buf).size() < FRAME_LEN && id(pm25uart).read_byte(&tmp)) {
+            id(pm25_buf).push_back(tmp);
+          }
 
-      while (true) {
-        if (id(pm25_buf).size() < 3) break;
+          while (true) {
+            if (id(pm25_buf).size() < 3) break;
 
-        // Align on header
-        while (id(pm25_buf).size() >= 3 &&
-              !(id(pm25_buf)[0] == HEADER[0] && id(pm25_buf)[1] == HEADER[1] && id(pm25_buf)[2] == HEADER[2])) {
-          id(pm25_buf).erase(id(pm25_buf).begin());
-        }
+            // Align on header
+            while (id(pm25_buf).size() >= 3 &&
+                  !(id(pm25_buf)[0] == HEADER[0] && id(pm25_buf)[1] == HEADER[1] && id(pm25_buf)[2] == HEADER[2])) {
+              id(pm25_buf).erase(id(pm25_buf).begin());
+            }
 
-        if (id(pm25_buf).size() < 3) break;
-        if ((int)id(pm25_buf).size() < FRAME_LEN) break;
+            if (id(pm25_buf).size() < 3) break;
+            if ((int)id(pm25_buf).size() < FRAME_LEN) break;
 
-        // Extract frame
-        uint8_t frame[FRAME_LEN];
-        for (int i = 0; i < FRAME_LEN; i++) {
-          frame[i] = id(pm25_buf).front();
-          id(pm25_buf).erase(id(pm25_buf).begin());
-        }
+            // Extract frame
+            uint8_t frame[FRAME_LEN];
+            for (int i = 0; i < FRAME_LEN; i++) {
+              frame[i] = id(pm25_buf).front();
+              id(pm25_buf).erase(id(pm25_buf).begin());
+            }
 
-        uint16_t pm25val = (((uint16_t)frame[15]) << 8) | frame[16];
-        id(pm25sensor).publish_state(pm25val);
-      }
+            uint16_t pm25val = (((uint16_t)frame[15]) << 8) | frame[16];
+            id(pm25sensor).publish_state(pm25val);
+          }
 
   # Filter runtime tracker - updates every hour
   - interval: 1h
