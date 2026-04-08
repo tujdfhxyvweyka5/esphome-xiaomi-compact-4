@@ -526,7 +526,7 @@ number:
     entity_category: config
     step: 1
     initial_value: 10
-    restore_mode: RESTORE_DEFAULT_OFF
+    restore_value: true
     optimistic: true
     on_value:
       - script.execute: motorUpdate
