@@ -538,7 +538,7 @@ number:
     max_value: 10
     step: 0.01    
     initial_value: 3
-    restore_mode: RESTORE_DEFAULT_OFF
+    restore_value: true
     optimistic: true
     entity_category: config
     on_value: 
