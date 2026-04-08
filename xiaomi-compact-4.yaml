@@ -103,7 +103,7 @@ switch:
     name: "Child Lock"
     id: childLock
     optimistic: true
-    restore_value: true
+    restore_mode: RESTORE_DEFAULT_OFF
     icon: mdi:lock
     on_state: 
       - script.execute: hidUpdate
