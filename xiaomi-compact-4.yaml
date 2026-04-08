@@ -151,7 +151,6 @@ switch:
     id: soundEnabled
     optimistic: true
     restore_mode: RESTORE_DEFAULT_OFF
-    initial_state: true
     icon: mdi:volume-high
 
 # PM2.5 sensor polling
